@@ -2,28 +2,25 @@ import React, { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-const COUNT = 1200;
+const COUNT = 1000; 
 
 export default function MagicSwords({ handData }) {
   const meshRef = useRef();
   const dummy = useMemo(() => new THREE.Object3D(), []);
   
-  const attractorPos = useRef(new THREE.Vector3(0, 0, 0));
-  const explosionPower = useRef(0);
-  const lastPos = useRef(new THREE.Vector3(0, 0, 0));
+  // Điểm hút mượt (Smooth Attractor)
+  const smoothAttractor = useRef(new THREE.Vector3(0, 0, 0));
+  const isGrip = useRef(false);
 
   const particles = useMemo(() => {
     return Array.from({ length: COUNT }, () => ({
       pos: new THREE.Vector3(),
       vel: new THREE.Vector3(),
-      // Offset hình cầu ban đầu
-      offset: new THREE.Vector3().setFromSphericalCoords(
-        Math.random() * 3 + 1, 
-        Math.random() * Math.PI,
-        Math.random() * Math.PI * 2
-      ),
-      friction: 0.85, // Giảm ma sát để kiếm dứt khoát hơn
-      phase: Math.random() * Math.PI * 2
+      // Mỗi hạt có một quỹ đạo xoay riêng để tạo cảm giác dòng nước
+      angle: Math.random() * Math.PI * 2,
+      radius: Math.random() * 3 + 1,
+      speed: 0.02 + Math.random() * 0.05,
+      friction: 0.9 + Math.random() * 0.05,
     }));
   }, []);
 
@@ -32,89 +29,79 @@ export default function MagicSwords({ handData }) {
     const time = state.clock.elapsedTime;
 
     if (handData) {
-      // 1. NHẬN DIỆN NGÓN TRỎ CỰC NHẠY
-      const indexTip = handData[8];
-      const middleTip = handData[12];
-      const ringTip = handData[16];
-      // Chỉ khi ngón trỏ cao hơn hẳn ngón giữa và ngón áp út mới tính là Pointing
-      const isPointing = indexTip.y < middleTip.y - 0.15 && indexTip.y < ringTip.y - 0.15;
+      // 1. NHẬN DIỆN NẮM TAY (GRIP)
+      // Tính khoảng cách từ đầu các ngón đến lòng bàn tay (landmark 0)
+      const tips = [8, 12, 16, 20];
+      const avgDist = tips.reduce((acc, idx) => {
+        const d = Math.sqrt(
+          Math.pow(handData[idx].x - handData[0].x, 2) +
+          Math.pow(handData[idx].y - handData[0].y, 2)
+        );
+        return acc + d;
+      }, 0) / 4;
 
-      const targetLandmark = isPointing ? handData[8] : handData[9];
+      isGrip.current = avgDist < 0.15; // Ngưỡng nắm tay
+
+      // 2. TÂM HÚT MƯỢT
       const targetPos = new THREE.Vector3(
-        (targetLandmark.x - 0.5) * -25,
-        (targetLandmark.y - 0.5) * -18,
-        targetLandmark.z * -20
+        (handData[9].x - 0.5) * -25,
+        (handData[9].y - 0.5) * -18,
+        handData[9].z * -20
+      );
+      // Lerp cực thấp (0.1) để tạo độ trễ như nước, giảm lag do tay rung
+      smoothAttractor.current.lerp(targetPos, 0.1);
+    }
+
+    particles.forEach((p, i) => {
+      // 3. LOGIC DÒNG NƯỚC & QUẢ CẦU
+      p.angle += p.speed;
+      
+      // Nếu nắm tay: Thu nhỏ bán kính và tăng tốc độ xoay để tạo quả cầu
+      const targetRadius = isGrip.current ? 1.5 : 4.0;
+      p.radius = THREE.MathUtils.lerp(p.radius, targetRadius, 0.05);
+
+      // Tính toán điểm đích dựa trên quỹ đạo xoay xung quanh tâm hút
+      const target = new THREE.Vector3(
+        smoothAttractor.current.x + Math.cos(p.angle + time) * p.radius,
+        smoothAttractor.current.y + Math.sin(p.angle + time * 0.8) * p.radius,
+        smoothAttractor.current.z + Math.sin(p.angle + time * 0.5) * p.radius
       );
 
-      // 2. CHỈ NỔ KHI VẬN TỐC THỰC SỰ LỚN (Ngưỡng 2.5 thay vì 1.2)
-      const moveDist = targetPos.distanceTo(lastPos.current);
-      if (moveDist > 2.5) {
-        explosionPower.current = 1.0;
-      }
-      lastPos.current.copy(targetPos);
+      // Thêm lực hút "mềm"
+      const force = target.sub(p.pos).multiplyScalar(0.02);
+      p.vel.add(force);
+      p.vel.multiplyScalar(p.friction);
+      p.pos.add(p.vel);
 
-      // Cập nhật tâm hút (giảm lerp để bám cực sát)
-      attractorPos.current.lerp(targetPos, 0.3);
+      // 4. HIỂN THỊ
+      dummy.position.copy(p.pos);
+      
+      // Hướng: Luôn hướng theo dòng chảy của nước (Vận tốc)
+      const lookAtTarget = p.pos.clone().add(p.vel);
+      if (p.vel.length() > 0.01) dummy.lookAt(lookAtTarget);
+      dummy.rotation.x += Math.PI / 2;
 
-      particles.forEach((p, i) => {
-        // 3. THU NHỎ KHI CHỈ TAY (Mũi khoan năng lượng)
-        // Nếu pointing, offset thu nhỏ lại 0.3, nếu không thì xòe ra 1.0
-        const scaleFactor = isPointing ? 0.3 : 1.0;
-        const currentOffset = p.offset.clone().multiplyScalar(scaleFactor);
-        
-        const target = attractorPos.current.clone().add(currentOffset);
-        
-        // Thêm chuyển động xoáy xung quanh tâm hút
-        const orbitSpeed = isPointing ? 10 : 2;
-        target.x += Math.sin(time * orbitSpeed + p.phase) * (0.2 * scaleFactor);
-        target.y += Math.cos(time * orbitSpeed + p.phase) * (0.2 * scaleFactor);
+      // Độ mảnh: Nắm tay thì kiếm ngắn lại (như giọt nước), xòe tay thì dài ra (như dòng chảy)
+      const s = isGrip.current ? 0.5 : 1.2;
+      dummy.scale.set(0.4, s + p.vel.length() * 5, 0.4);
 
-        // 4. LỰC HÚT SIÊU CẤP (Magnetic Power)
-        const force = new THREE.Vector3().subVectors(target, p.pos);
-        
-        // Lực nổ
-        if (explosionPower.current > 0.1) {
-          const boom = p.pos.clone().sub(attractorPos.current).normalize();
-          force.add(boom.multiplyScalar(explosionPower.current * 15));
-        }
+      dummy.updateMatrix();
+      meshRef.current.setMatrixAt(i, dummy.matrix);
+    });
 
-        p.vel.add(force.multiplyScalar(0.2)); // Tăng lực hút lên 0.2
-        p.vel.multiplyScalar(p.friction);
-        p.pos.add(p.vel);
-
-        // HIỂN THỊ
-        dummy.position.copy(p.pos);
-        
-        // Hướng theo vận tốc (Dòng chảy)
-        const lookTarget = p.pos.clone().add(p.vel);
-        if (p.vel.length() > 0.05) {
-            dummy.lookAt(lookTarget);
-        } else {
-            // Khi đứng yên hướng ra ngoài tâm
-            dummy.lookAt(p.pos.clone().add(p.pos.clone().sub(attractorPos.current)));
-        }
-        dummy.rotation.x += Math.PI / 2;
-
-        // Stretch cực mạnh tạo vệt trail
-        const speed = p.vel.length();
-        dummy.scale.set(0.3, 1 + speed * 12, 0.3);
-
-        dummy.updateMatrix();
-        meshRef.current.setMatrixAt(i, dummy.matrix);
-      });
-    }
-    
-    explosionPower.current *= 0.92; // Nổ xong thu lại nhanh hơn
     meshRef.current.instanceMatrix.needsUpdate = true;
   });
 
   return (
     <instancedMesh ref={meshRef} args={[null, null, COUNT]}>
-      <coneGeometry args={[0.015, 1.2, 3]} />
+      {/* Dùng khối hình nón mảnh để trông như tia nước */}
+      <coneGeometry args={[0.012, 1, 3]} /> 
       <meshStandardMaterial 
-        color={explosionPower.current > 0.5 ? "#ffffff" : "#00ffff"} 
-        emissive={explosionPower.current > 0.5 ? "#00ffff" : "#0044ff"} 
-        emissiveIntensity={explosionPower.current > 0.5 ? 20 : 5} 
+        color={isGrip.current ? "#0099ff" : "#00ffff"} 
+        emissive={isGrip.current ? "#0033ff" : "#00ffff"} 
+        emissiveIntensity={isGrip.current ? 10 : 2} 
+        transparent
+        opacity={0.8}
         toneMapped={false} 
       />
     </instancedMesh>
