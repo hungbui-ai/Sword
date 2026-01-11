@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@mediapipe/hands": "^0.4.1646424915",
+    "@react-three/drei": "^9.88.0",
+    "@react-three/fiber": "^8.15.0",
+    "@react-three/postprocessing": "^2.15.0",
+    "three": "^0.158.0"
+  }
+}
