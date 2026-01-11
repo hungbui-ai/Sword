@@ -1,19 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
+import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import MagicSwords from "./components/MagicSwords";
 
 export default function App() {
   const videoRef = useRef(null);
-  const [handData, setHandData] = useState(null);
+  const [handLandmarks, setHandLandmarks] = useState(null);
 
   useEffect(() => {
     let camera = null;
-    let isTracking = true;
-
-    const initTracking = () => {
-      if (!window.Hands || !window.Camera || !videoRef.current || !isTracking) {
-        setTimeout(initTracking, 500);
+    const init = () => {
+      if (!window.Hands || !window.Camera || !videoRef.current) {
+        setTimeout(init, 500);
         return;
       }
 
@@ -23,8 +21,7 @@ export default function App() {
 
       hands.setOptions({
         maxNumHands: 1,
-        // QUAN TRỌNG: Dùng model nhẹ nhất để giảm lag
-        modelComplexity: 0, 
+        modelComplexity: 0, // 0 để cực mượt, không lag
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5,
         selfieMode: true
@@ -32,60 +29,35 @@ export default function App() {
 
       hands.onResults((results) => {
         if (results.multiHandLandmarks && results.multiHandLandmarks[0]) {
-          // Lấy tọa độ ngón giữa (landmark 9) để ổn định hơn ngón trỏ
-          setHandData(results.multiHandLandmarks[0][9]);
+          setHandLandmarks(results.multiHandLandmarks[0]);
         } else {
-          setHandData(null);
+          setHandLandmarks(null);
         }
       });
 
       camera = new window.Camera(videoRef.current, {
         onFrame: async () => {
-          if (isTracking && videoRef.current) {
-             await hands.send({ image: videoRef.current });
-          }
+          await hands.send({ image: videoRef.current });
         },
-        // Độ phân giải tối ưu cho tốc độ
         width: 640,
         height: 480,
       });
       camera.start();
     };
-
-    initTracking();
-
-    return () => {
-      isTracking = false;
-      if (camera) camera.stop();
-      if (hands) hands.close();
-    };
+    init();
   }, []);
 
   return (
-    <div style={{ width: "100vw", height: "100vh", background: "#000", margin: 0, overflow: 'hidden' }}>
+    <div style={{ width: "100vw", height: "100vh", background: "#000" }}>
       <video ref={videoRef} style={{ display: "none" }} playsInline />
-      
-      {/* Tắt antialias để tăng fps, dpr thấp để nhẹ máy */}
-      <Canvas gl={{ antialias: false, alpha: false }} dpr={[1, 1.5]} camera={{ position: [0, 0, 14], fov: 45 }}>
+      <Canvas gl={{ antialias: false }} camera={{ position: [0, 0, 15], fov: 45 }}>
         <color attach="background" args={["#020202"]} />
-        
-        <MagicSwords handData={handData} />
-
-        <EffectComposer disableNormalPass>
-          {/* Tăng luminanceThreshold để chỉ phần kiếm phát sáng, nền tối đi */}
-          <Bloom intensity={2.5} luminanceThreshold={0.4} mipmapBlur radius={0.7} />
-          <Vignette darkness={0.5} />
+        <ambientLight intensity={1} />
+        <MagicSwords handLandmarks={handLandmarks} />
+        <EffectComposer>
+          <Bloom intensity={2.5} luminanceThreshold={0.2} mipmapBlur />
         </EffectComposer>
       </Canvas>
-
-      {!handData && (
-        <div style={{
-          position: "absolute", bottom: "10%", width: "100%", textAlign: "center",
-          color: "#55ffaa", fontFamily: "monospace", letterSpacing: '2px', pointerEvents: "none"
-        }}>
-          [ ĐANG TÌM TÍN HIỆU TAY... ]
-        </div>
-      )}
     </div>
   );
 }

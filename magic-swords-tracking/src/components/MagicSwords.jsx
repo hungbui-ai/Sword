@@ -2,89 +2,105 @@ import React, { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-// Giảm số lượng xuống mức an toàn cho đa số thiết bị
-const COUNT = 500; 
+const JOINT_COUNT = 21;
+const PER_JOINT = 20; // Số kiếm trên mỗi khớp
+const TOTAL_COUNT = JOINT_COUNT * PER_JOINT;
 
-export default function MagicSwords({ handData }) {
+export default function MagicSwords({ handLandmarks }) {
   const meshRef = useRef();
   const dummy = useMemo(() => new THREE.Object3D(), []);
-  // Dùng Vector3 để làm mượt chuyển động tay
-  const target = useMemo(() => new THREE.Vector3(0,0,0), []);
+  
+  // Mảng lưu vị trí mượt của 21 khớp
+  const smoothedJoints = useMemo(() => 
+    Array.from({ length: JOINT_COUNT }, () => new THREE.Vector3()), []
+  );
 
-  // Tạo dữ liệu hạt phong phú hơn
-  const particles = useMemo(() => {
-    return Array.from({ length: COUNT }, (_, i) => ({
-      t: Math.random() * 100, // Thời gian riêng
-      factor: 2 + Math.random() * 5, // Bán kính quỹ đạo
-      speed: 0.01 + Math.random() * 0.02, // Tốc độ riêng
-      offset: Math.random() * Math.PI * 2, // Góc lệch pha
-      myY: Math.random() * 2 - 1, // Độ cao ngẫu nhiên
+  // Khởi tạo các thanh kiếm với "tâm hồn" riêng
+  const swords = useMemo(() => {
+    return Array.from({ length: TOTAL_COUNT }, (_, i) => ({
+      jointIdx: i % JOINT_COUNT, // Bám theo khớp nào
+      offset: new THREE.Vector3(
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 2
+      ),
+      speed: 0.02 + Math.random() * 0.05,
+      phase: Math.random() * Math.PI * 2
     }));
   }, []);
-
-  // Tạo geometry và material một lần duy nhất bên ngoài useFrame
-  const geometry = useMemo(() => new THREE.BoxGeometry(0.04, 1, 0.02), []);
-  const material = useMemo(() => new THREE.MeshStandardMaterial({
-    color: "#20ff80",
-    emissive: "#40ffaa",
-    emissiveIntensity: 4,
-    roughness: 0.1,
-    metalness: 0.8,
-    toneMapped: false // Quan trọng để màu phát sáng rực rỡ
-  }), []);
-
 
   useFrame((state) => {
     if (!meshRef.current) return;
     const time = state.clock.elapsedTime;
 
-    // 1. Làm mượt vị trí tay (Lerp)
-    let tx = 0, ty = 0;
-    if (handData) {
-       tx = (handData.x - 0.5) * -22; // Mở rộng phạm vi di chuyển
-       ty = (handData.y - 0.5) * -16;
+    // 1. Tính toán độ mở bàn tay (Gesture)
+    let openness = 1.0;
+    if (handLandmarks) {
+      // Khoảng cách từ cổ tay (0) đến đầu ngón giữa (12)
+      const dx = handLandmarks[12].x - handLandmarks[0].x;
+      const dy = handLandmarks[12].y - handLandmarks[0].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      openness = THREE.MathUtils.clamp(dist * 2.5, 0.2, 1.5);
+
+      // Cập nhật vị trí 21 khớp
+      handLandmarks.forEach((pt, i) => {
+        const x = (pt.x - 0.5) * -22;
+        const y = (pt.y - 0.5) * -16;
+        const z = pt.z * -15;
+        smoothedJoints[i].lerp(new THREE.Vector3(x, y, z), 0.2);
+      });
     }
-    // Di chuyển điểm target từ từ đến vị trí tay mới (độ trễ 0.1)
-    target.lerp(new THREE.Vector3(tx, ty, 0), 0.1);
 
-    particles.forEach((p, i) => {
-      p.t += p.speed;
+    // 2. Di chuyển từng thanh kiếm
+    swords.forEach((s, i) => {
+      const joint = smoothedJoints[s.jointIdx];
       
-      // CÔNG THỨC TOÁN HỌC TẠO ĐỘ "ẢO"
-      // Kết hợp nhiều sóng sin/cos để tạo chuyển động hữu cơ (organic)
-      const angle = p.offset + p.t * 0.5;
-      // Bán kính thay đổi theo thời gian
-      const radius = p.factor + Math.sin(time * 2 + p.offset) * 0.5;
-      // Tạo độ nhấp nhô theo trục Z
-      const zWave = Math.sin(angle * 3 + time) * 1.5 + Math.cos(time + p.myY) * 1.5;
-      
-      const x = target.x + Math.cos(angle) * radius;
-      const y = target.y + Math.sin(angle) * radius + p.myY * 2; // Thêm độ cao riêng
-      const z = target.z + zWave;
+      // Hiệu ứng lơ lửng quanh khớp
+      const orbitX = Math.sin(time * 2 + s.phase) * s.offset.x * openness;
+      const orbitY = Math.cos(time * 2 + s.phase) * s.offset.y * openness;
+      const orbitZ = Math.sin(time * 3 + s.phase) * s.offset.z * openness;
 
-      dummy.position.set(x, y, z);
+      const targetPos = new THREE.Vector3(
+        joint.x + orbitX,
+        joint.y + orbitY,
+        joint.z + orbitZ
+      );
+
+      // Nếu không có tay, kiếm sẽ tự động bay về tâm và xoay nhẹ
+      if (!handLandmarks) {
+        targetPos.set(
+          Math.sin(time + s.phase) * 5,
+          Math.cos(time + s.phase) * 5,
+          Math.sin(time * 0.5) * 2
+        );
+      }
+
+      dummy.position.lerp(targetPos, 0.1); // Tạo độ trễ vật lý (Lag nghệ thuật)
       
-      // Hướng kiếm về phía tay nhưng có chút nhiễu động
-      dummy.lookAt(target.x, target.y + Math.sin(time + i) * 2, target.z);
-      dummy.rotation.x += Math.PI / 2; // Xoay để lưỡi kiếm hướng tới trước
-      
-      // HIỆU ỨNG KÉO DÃN KHI DI CHUYỂN (Stretch)
-      // Tính khoảng cách đến tâm để biết tốc độ ở rìa
-      const distToCenter = Math.sqrt(x*x + y*y);
-      const stretch = 1 + distToCenter * 0.05; // Càng xa tâm càng dài ra
-      dummy.scale.set(1, stretch, 1);
+      // Hướng kiếm luôn hướng về phía camera hoặc ra ngoài
+      dummy.lookAt(dummy.position.x, dummy.position.y, 10);
+      dummy.rotation.x += Math.PI / 2;
+
+      // Xòe tay thì kiếm to ra, nắm tay thì kiếm thu nhỏ/mảnh lại
+      const scale = 0.5 + openness * 0.5;
+      dummy.scale.set(scale, scale, scale);
 
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(i, dummy.matrix);
     });
 
     meshRef.current.instanceMatrix.needsUpdate = true;
-    // Quay nhẹ toàn bộ khối kiếm
-    meshRef.current.rotation.z = time * 0.05;
   });
 
   return (
-    <instancedMesh ref={meshRef} args={[geometry, material, COUNT]} frustumCulled={false}>
+    <instancedMesh ref={meshRef} args={[null, null, TOTAL_COUNT]}>
+      <cylinderGeometry args={[0.01, 0.03, 1.2, 4]} />
+      <meshStandardMaterial 
+        color="#00ffcc" 
+        emissive="#00ffaa" 
+        emissiveIntensity={8} 
+        toneMapped={false} 
+      />
     </instancedMesh>
   );
 }
