@@ -8,8 +8,8 @@ export const setupHands = (onResults) => {
   hands.setOptions({
     maxNumHands: 1,
     modelComplexity: 1,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.6,
   });
 
   hands.onResults(onResults);
