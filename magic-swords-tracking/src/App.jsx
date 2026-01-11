@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { Bloom, EffectComposer, Vignette, ChromaticAberration } from "@react-three/postprocessing";
+import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import MagicSwords from "./components/MagicSwords";
 
 export default function App() {
@@ -9,21 +9,26 @@ export default function App() {
 
   useEffect(() => {
     let camera = null;
+    let hands = null;
+
     const init = () => {
       if (!window.Hands || !window.Camera || !videoRef.current) {
-        setTimeout(init, 500);
+        requestAnimationFrame(init);
         return;
       }
-      const hands = new window.Hands({
+
+      hands = new window.Hands({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
       });
+
       hands.setOptions({
         maxNumHands: 1,
         modelComplexity: 1,
-        minDetectionConfidence: 0.6, // Tăng nhẹ để ổn định
-        minTrackingConfidence: 0.6,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
         selfieMode: true
       });
+
       hands.onResults((results) => {
         if (results.multiHandLandmarks && results.multiHandLandmarks[0]) {
           setHandData(results.multiHandLandmarks[0]);
@@ -31,27 +36,33 @@ export default function App() {
           setHandData(null);
         }
       });
+
       camera = new window.Camera(videoRef.current, {
-        onFrame: async () => { await hands.send({ image: videoRef.current }); },
-        width: 1280, height: 720,
+        onFrame: async () => {
+          if (videoRef.current) await hands.send({ image: videoRef.current });
+        },
+        width: 640,
+        height: 480,
       });
       camera.start();
     };
     init();
+
+    return () => {
+      if (camera) camera.stop();
+      if (hands) hands.close();
+    };
   }, []);
 
   return (
     <div style={{ width: "100vw", height: "100vh", background: "#000" }}>
-      <video ref={videoRef} style={{ display: "none" }} playsInline />
-      {/* Dùng dpr thấp để tăng hiệu năng, antialias false để nét */}
-      <Canvas camera={{ position: [0, 0, 14], fov: 50 }} gl={{ antialias: false }} dpr={[1, 1.5]}>
-        <color attach="background" args={["#030303"]} />
+      <video ref={videoRef} style={{ display: "none" }} />
+      <Canvas camera={{ position: [0, 0, 15], fov: 45 }}>
+        <color attach="background" args={["#020202"]} />
+        <ambientLight intensity={1} />
         <MagicSwords handData={handData} />
-        <EffectComposer disableNormalPass>
-          {/* Tinh chỉnh Bloom: Giảm intensity, tăng threshold để chỉ sáng phần lõi */}
-          <Bloom intensity={1.2} luminanceThreshold={0.6} luminanceSmoothing={0.9} mipmapBlur radius={0.5} />
-          <ChromaticAberration offset={[0.002, 0.002]} />
-          <Vignette darkness={0.6} />
+        <EffectComposer>
+          <Bloom intensity={1.5} luminanceThreshold={0.4} mipmapBlur />
         </EffectComposer>
       </Canvas>
     </div>
