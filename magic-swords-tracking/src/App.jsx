@@ -8,9 +8,16 @@ export default function App() {
   const [handData, setHandData] = useState(null);
 
   useEffect(() => {
-    // Hàm khởi tạo sau khi script CDN đã tải xong
-    const startTracking = () => {
-      if (!window.Hands || !window.Camera || !videoRef.current) return;
+    let camera = null;
+    
+    const initTracking = () => {
+      // Kiểm tra xem script từ index.html đã load xong chưa
+      if (!window.Hands || !window.Camera) {
+        setTimeout(initTracking, 500);
+        return;
+      }
+
+      if (!videoRef.current) return;
 
       const hands = new window.Hands({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
@@ -25,12 +32,14 @@ export default function App() {
 
       hands.onResults((results) => {
         if (results.multiHandLandmarks && results.multiHandLandmarks[0]) {
-          // Gửi tọa độ ngón trỏ vào state
+          // Lấy tọa độ ngón trỏ (Index 8)
           setHandData(results.multiHandLandmarks[0][8]);
+        } else {
+          setHandData(null);
         }
       });
 
-      const camera = new window.Camera(videoRef.current, {
+      camera = new window.Camera(videoRef.current, {
         onFrame: async () => {
           await hands.send({ image: videoRef.current });
         },
@@ -40,27 +49,37 @@ export default function App() {
       camera.start();
     };
 
-    // Đợi một chút để đảm bảo window.Hands đã sẵn sàng
-    const timer = setTimeout(startTracking, 1000);
-    return () => clearTimeout(timer);
+    initTracking();
+
+    return () => {
+      if (camera) camera.stop();
+    };
   }, []);
 
   return (
-    <div style={{ width: "100vw", height: "100vh", background: "#000" }}>
+    <div style={{ width: "100vw", height: "100vh", background: "#000", margin: 0 }}>
       <video ref={videoRef} style={{ display: "none" }} playsInline />
       
       <Canvas camera={{ position: [0, 0, 10], fov: 50 }}>
         <color attach="background" args={["#000"]} />
-        <ambientLight intensity={1} />
+        <ambientLight intensity={1.5} />
         <pointLight position={[10, 10, 10]} intensity={2} />
         
-        {/* Chỉ truyền handData khi đã có dữ liệu */}
         <MagicSwords handData={handData} />
 
         <EffectComposer>
-          <Bloom intensity={2} luminanceThreshold={0.1} mipmapBlur />
+          <Bloom intensity={2.5} luminanceThreshold={0.1} mipmapBlur />
         </EffectComposer>
       </Canvas>
+
+      {!handData && (
+        <div style={{
+          position: "absolute", bottom: "10%", width: "100%", textAlign: "center",
+          color: "#00ffaa", fontFamily: "Arial", textShadow: "0 0 10px #00ffaa"
+        }}>
+          GIƠ TAY LÊN ĐỂ TRIỆU HỒI KIẾM
+        </div>
+      )}
     </div>
   );
 }
