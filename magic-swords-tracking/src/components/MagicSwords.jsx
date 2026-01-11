@@ -2,100 +2,114 @@ import React, { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-const COUNT = 800;
-const JOINTS = 21;
+const COUNT = 1000; // Số lượng lớn để tạo thành dòng chảy liên tục
 
-// Hàm phụ trợ: Tạo điểm ngẫu nhiên trên mặt cầu (Spherical distribution)
-const randomSpherePoint = (radius) => {
-  const u = Math.random();
-  const v = Math.random();
-  const theta = 2 * Math.PI * u;
-  const phi = Math.acos(2 * v - 1);
-  // Đảm bảo phân bố đều 3D
-  const x = radius * Math.sin(phi) * Math.cos(theta);
-  const y = radius * Math.sin(phi) * Math.sin(theta);
-  const z = radius * Math.cos(phi);
-  return new THREE.Vector3(x, y, z);
+// Hàm tạo "tạp nhiễu 3D" giả lập (Curl Noise approximation)
+// Giúp kiếm chuyển động uốn lượn như khói/nước
+const curlNoise = (p, time) => {
+  const scale = 0.5; // Độ lớn của xoáy
+  const x = Math.sin(p.y * scale + time) * Math.cos(p.z * scale + time * 0.5);
+  const y = Math.sin(p.z * scale + time) * Math.cos(p.x * scale + time * 0.5);
+  const z = Math.sin(p.x * scale + time) * Math.cos(p.y * scale + time * 0.5);
+  return new THREE.Vector3(x, y, z).multiplyScalar(0.2); // Sức mạnh của dòng chảy
 };
 
 export default function MagicSwords({ handData }) {
   const meshRef = useRef();
   const dummy = useMemo(() => new THREE.Object3D(), []);
   
-  // 1. KHỞI TẠO VẬT LÝ HẠT
+  // Vị trí trung tâm của bàn tay (để làm điểm hút chính)
+  const handCenter = useRef(new THREE.Vector3(0, 0, 0));
+  // Vận tốc của tay (để tạo quán tính)
+  const handVelocity = useRef(new THREE.Vector3(0, 0, 0));
+  const prevHandPos = useRef(new THREE.Vector3(0, 0, 0));
+
   const particles = useMemo(() => {
     return Array.from({ length: COUNT }, () => ({
-      position: randomSpherePoint(15), // Bắt đầu ở dạng cầu
+      position: new THREE.Vector3((Math.random()-0.5)*20, (Math.random()-0.5)*20, 0),
       velocity: new THREE.Vector3(),
-      jointIdx: Math.floor(Math.random() * JOINTS),
-      // OFFSET HÌNH CẦU: Quan trọng để không bị Donut
-      offset: randomSpherePoint(Math.random() * 3 + 1), 
-      mass: 0.5 + Math.random() * 1.5,
-      phase: Math.random() * Math.PI * 2,
+      // Mỗi hạt có một "offset" riêng để không tụ vào cùng 1 điểm
+      offset: new THREE.Vector3(
+        (Math.random() - 0.5) * 4,
+        (Math.random() - 0.5) * 4,
+        (Math.random() - 0.5) * 2
+      ),
+      speed: 0.5 + Math.random(), // Tốc độ trôi khác nhau
+      life: Math.random(), // Để tạo hiệu ứng nhấp nháy
     }));
   }, []);
-
-  const jointPositions = useMemo(() => Array.from({ length: JOINTS }, () => new THREE.Vector3()), []);
 
   useFrame((state) => {
     if (!meshRef.current) return;
     const time = state.clock.elapsedTime;
+    const dt = 0.016; // Time step cố định cho vật lý ổn định
 
-    // 2. TÍNH TOÁN ĐỘ MỞ BÀN TAY (GESTURE)
-    let openness = 1.0;
+    // 1. CẬP NHẬT VỊ TRÍ TAY & VẬN TỐC
+    let hasHand = false;
     if (handData) {
-      const d = new THREE.Vector3(handData[0].x, handData[0].y, 0)
-                .distanceTo(new THREE.Vector3(handData[12].x, handData[12].y, 0));
-      openness = THREE.MathUtils.mapLinear(d, 0.15, 0.4, 0.1, 1.2);
-      openness = THREE.MathUtils.clamp(openness, 0.1, 1.5);
-
-      handData.forEach((pt, i) => {
-        // Tăng hệ số Z để tạo độ sâu 3D rõ ràng hơn
-        jointPositions[i].set((pt.x - 0.5) * 24, (pt.y - 0.5) * -18, pt.z * -25);
-      });
+      hasHand = true;
+      // Tính trung tâm bàn tay (trung bình cộng cổ tay và ngón giữa)
+      const x = (handData[9].x - 0.5) * 22; // Landmark 9 là khớp giữa bàn tay
+      const y = (handData[9].y - 0.5) * -16;
+      const z = handData[9].z * -20;
+      
+      const currentPos = new THREE.Vector3(x, y, z);
+      
+      // Tính vận tốc tay: (Mới - Cũ) / thời gian
+      handVelocity.current.subVectors(currentPos, prevHandPos.current).multiplyScalar(0.1);
+      prevHandPos.current.copy(currentPos);
+      
+      // Di chuyển điểm hút về phía tay (có độ trễ để mềm mại)
+      handCenter.current.lerp(currentPos, 0.1);
     }
 
-    // 3. VÒNG LẶP VẬT LÝ
     particles.forEach((p, i) => {
-      const joint = jointPositions[p.jointIdx];
-      const target = new THREE.Vector3();
-
-      if (handData) {
-        // Mục tiêu = Vị trí khớp + Offset hình cầu (được scale theo độ mở tay)
-        target.copy(joint).add(p.offset.clone().multiplyScalar(openness));
-        
-        // Thêm nhiễu động 3D
-        const noiseScale = openness * 0.5;
-        target.x += Math.sin(time * 3 + p.phase) * noiseScale;
-        target.y += Math.cos(time * 2 + p.phase) * noiseScale;
-        target.z += Math.sin(time * 4 + p.phase) * noiseScale; // Nhiễu động trục Z mạnh hơn
-      } else {
-        // Bay lơ lửng dạng cầu khi không có tay
-        const idleSphere = randomSpherePoint(10 + Math.sin(time + p.phase)*2);
-        target.copy(idleSphere);
+      // 2. LỰC HÚT (Attraction Force)
+      // Thay vì hút vào từng ngón tay, tất cả bị hút vào "dòng chảy" quanh bàn tay
+      const target = handCenter.current.clone().add(p.offset);
+      
+      // Nếu tay di chuyển nhanh, dòng chảy bị kéo dãn ra sau (Trail effect)
+      if (hasHand) {
+        target.sub(handVelocity.current.clone().multiplyScalar(10)); 
       }
 
-      // Lực hút đàn hồi (Spring force)
       const force = new THREE.Vector3().subVectors(target, p.position);
       const dist = force.length();
-      force.normalize().multiplyScalar(dist * 0.05); // Lực hút mạnh hơn chút
+
+      // Hút càng mạnh khi càng xa, nhưng rất nhẹ khi ở gần -> Tạo độ bồng bềnh
+      force.normalize().multiplyScalar(dist * 0.05);
+
+      // 3. CỘNG LỰC DÒNG CHẢY (Flow Noise)
+      // Đây là bí mật: Cộng thêm vector xoáy vào lực hút
+      const noise = curlNoise(p.position, time * 1.5);
       
-      p.velocity.add(force.divideScalar(p.mass));
-      p.velocity.multiplyScalar(0.91); // Ma sát cao để chuyển động dứt khoát
+      // Tổng hợp lực: Hút về tay + Nhiễu động dòng chảy
+      p.velocity.add(force);
+      p.velocity.add(noise);
+
+      // 4. MA SÁT (Damping)
+      // Giúp kiếm không bay vèo vèo mất kiểm soát. 
+      // Giá trị 0.9 tạo cảm giác như bơi trong nước.
+      p.velocity.multiplyScalar(0.92);
+
+      // Cập nhật vị trí
       p.position.add(p.velocity);
 
-      // HIỂN THỊ
+      // 5. HIỂN THỊ
       dummy.position.copy(p.position);
-      const velocityDir = p.position.clone().add(p.velocity);
-      dummy.lookAt(velocityDir);
-      dummy.rotation.x += Math.PI / 2;
+      
+      // Hướng: Luôn hướng theo chiều dòng chảy (Velocity)
+      // Cộng thêm position để lookAt tính đúng hướng trong không gian
+      const lookTarget = p.position.clone().add(p.velocity);
+      dummy.lookAt(lookTarget);
+      dummy.rotation.x += Math.PI / 2; // Xoay lại cho đúng trục nón
 
-      // Kéo dãn theo tốc độ
+      // Scale: Kéo dãn cực đại khi di chuyển nhanh (Stretch)
       const speed = p.velocity.length();
-      const stretch = 1 + speed * 4;
-      // Scale nhỏ lại khi nắm tay
-      const baseScale = openness * 0.4 + 0.6;
-      dummy.scale.set(baseScale, stretch * baseScale, baseScale);
+      const stretch = 1 + speed * 6; // Kéo dài hơn nữa
+      const thickness = Math.max(0.3, 1 - speed * 0.5); // Càng nhanh càng mảnh
+      
+      dummy.scale.set(thickness, stretch, thickness);
 
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(i, dummy.matrix);
@@ -106,16 +120,15 @@ export default function MagicSwords({ handData }) {
 
   return (
     <instancedMesh ref={meshRef} args={[null, null, COUNT]}>
-      {/* HÌNH NÓN CỰC MẢNH (Needle shape) */}
-      <coneGeometry args={[0.008, 1.5, 4]} /> 
+      {/* Hình nón cực mảnh và dài */}
+      <coneGeometry args={[0.015, 1.0, 4]} /> 
       <meshStandardMaterial 
         color="#00ffff" 
-        emissive="#00fff2" 
-        // GIẢM ĐỘ SÁNG ĐỂ TRÁNH CHÓI
-        emissiveIntensity={3} 
-        toneMapped={false}
-        roughness={0.1}
-        metalness={0.8}
+        emissive="#00eeff" 
+        emissiveIntensity={4} 
+        toneMapped={false} 
+        transparent
+        opacity={0.8}
       />
     </instancedMesh>
   );
