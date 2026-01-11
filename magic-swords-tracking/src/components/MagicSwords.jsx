@@ -2,78 +2,88 @@ import React, { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-const JOINT_COUNT = 21;
-const PER_JOINT = 15; 
-const TOTAL_COUNT = JOINT_COUNT * PER_JOINT;
+const COUNT = 600; // Tăng số lượng để nhìn cho sướng
+const JOINTS = 21;
 
 export default function MagicSwords({ handLandmarks }) {
   const meshRef = useRef();
   const dummy = useMemo(() => new THREE.Object3D(), []);
   
-  // Lưu vị trí mượt của 21 khớp
-  const smoothedJoints = useMemo(() => 
-    Array.from({ length: JOINT_COUNT }, () => new THREE.Vector3()), []
-  );
-
-  const swords = useMemo(() => {
-    return Array.from({ length: TOTAL_COUNT }, (_, i) => ({
-      jointIdx: i % JOINT_COUNT,
-      // TĂNG ĐỘ LAN TỎA (Spread): Kiếm sẽ bay rộng quanh khớp
-      offset: new THREE.Vector3(
-        (Math.random() - 0.5) * 6,
-        (Math.random() - 0.5) * 6,
-        (Math.random() - 0.5) * 6
+  // Khởi tạo các thuộc tính vật lý cho từng thanh kiếm
+  const particles = useMemo(() => {
+    return Array.from({ length: COUNT }, () => ({
+      position: new THREE.Vector3(Math.random() * 20 - 10, Math.random() * 20 - 10, 0),
+      velocity: new THREE.Vector3(),
+      accel: new THREE.Vector3(),
+      jointIdx: Math.floor(Math.random() * JOINTS), // Bám theo khớp ngẫu nhiên
+      mass: 0.5 + Math.random() * 1.5, // Khối lượng khác nhau tạo quán tính khác nhau
+      randomOffset: new THREE.Vector3(
+        (Math.random() - 0.5) * 8, // Tăng độ văng cực rộng
+        (Math.random() - 0.5) * 8,
+        (Math.random() - 0.5) * 8
       ),
-      speed: 0.01 + Math.random() * 0.03,
       phase: Math.random() * Math.PI * 2
     }));
   }, []);
+
+  // Vị trí các khớp tay trong không gian 3D
+  const jointTargets = useMemo(() => Array.from({ length: JOINTS }, () => new THREE.Vector3()), []);
 
   useFrame((state) => {
     if (!meshRef.current) return;
     const time = state.clock.elapsedTime;
 
+    // Cập nhật vị trí các khớp tay từ MediaPipe
     if (handLandmarks) {
       handLandmarks.forEach((pt, i) => {
-        // FIX HƯỚNG DI CHUYỂN: Dùng (pt.x - 0.5) * 22 để khớp với SelfieMode
-        const x = (pt.x - 0.5) * 22; 
-        const y = (pt.y - 0.5) * -16;
-        const z = pt.z * -15;
-        smoothedJoints[i].lerp(new THREE.Vector3(x, y, z), 0.12);
+        jointTargets[i].set((0.5 - pt.x) * 25, (0.5 - pt.y) * 18, pt.z * -20);
       });
     }
 
-    swords.forEach((s, i) => {
-      const joint = smoothedJoints[s.jointIdx];
+    particles.forEach((p, i) => {
+      const target = new THREE.Vector3();
       
-      // Hiệu ứng Noise để kiếm không bị đứng im một cục
-      const noise = Math.sin(time * 1.5 + s.phase) * 0.8;
-      
-      const targetPos = new THREE.Vector3(
-        joint.x + s.offset.x + noise,
-        joint.y + s.offset.y + noise,
-        joint.z + s.offset.z + noise
-      );
-
-      // Nếu không có tay, cho kiếm bay tự do toàn màn hình
-      if (!handLandmarks) {
-        targetPos.set(
-          Math.sin(time * 0.3 + s.phase) * 10,
-          Math.cos(time * 0.3 + s.phase) * 8,
-          Math.sin(time * 0.5) * 5
-        );
+      if (handLandmarks) {
+        // LỰC HÚT: Mỗi thanh kiếm bị hút về khớp tay của nó + một khoảng cách ngẫu nhiên
+        target.copy(jointTargets[p.jointIdx]).add(p.randomOffset);
+        
+        // Thêm một chút chuyển động "bơi" tự do
+        target.x += Math.sin(time + p.phase) * 2;
+        target.y += Math.cos(time + p.phase) * 2;
+      } else {
+        // Khi không có tay, bay tự do lơ lửng
+        target.set(Math.sin(time * 0.5 + p.phase) * 12, Math.cos(time * 0.5 + p.phase) * 8, 0);
       }
 
-      // Tăng độ trễ để tạo vệt (Ghostly trail)
-      dummy.position.lerp(targetPos, 0.07); 
+      // Logic Vật Lý Quán Tính:
+      // 1. Tính toán lực hút (Vector từ kiếm tới tay)
+      const force = new THREE.Vector3().subVectors(target, p.position);
+      const dist = force.length();
       
-      // Hướng kiếm: Luôn nhìn về phía khớp tay tương ứng
-      dummy.lookAt(joint.x, joint.y, joint.z);
+      // Càng xa hút càng mạnh, nhưng giới hạn lại để không bị giật
+      force.normalize().multiplyScalar(dist * 0.05); 
+      
+      // 2. Cập nhật gia tốc và vận tốc
+      p.accel.copy(force).divideScalar(p.mass);
+      p.velocity.add(p.accel);
+      
+      // 3. MA SÁT (Damping): Quan trọng để kiếm không bay mất tiêu (0.92 là mức rất mượt)
+      p.velocity.multiplyScalar(0.92); 
+      
+      // 4. Cập nhật vị trí
+      p.position.add(p.velocity);
+
+      // Thiết lập hiển thị
+      dummy.position.copy(p.position);
+      
+      // Hướng kiếm: Luôn quay theo hướng di chuyển (giống mũi tên)
+      const lookAtPos = new THREE.Vector3().addVectors(p.position, p.velocity);
+      dummy.lookAt(lookAtPos);
       dummy.rotation.x += Math.PI / 2;
 
-      // Scale nhẹ theo nhịp thở của noise
-      const sScale = 0.8 + Math.sin(time * 2 + s.phase) * 0.2;
-      dummy.scale.set(sScale, sScale, sScale);
+      // Kéo dãn theo vận tốc (Quán tính thị giác)
+      const speed = p.velocity.length();
+      dummy.scale.set(1, 1 + speed * 2, 1);
 
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(i, dummy.matrix);
@@ -83,11 +93,10 @@ export default function MagicSwords({ handLandmarks }) {
   });
 
   return (
-    <instancedMesh ref={meshRef} args={[null, null, TOTAL_COUNT]}>
-      {/* BoxGeometry siêu mảnh để nhìn giống tia sáng hơn */}
-      <boxGeometry args={[0.015, 1.2, 0.015]} /> 
+    <instancedMesh ref={meshRef} args={[null, null, COUNT]}>
+      <cylinderGeometry args={[0.01, 0.03, 1.2, 3]} />
       <meshStandardMaterial 
-        color="#00fff2" 
+        color="#00ffff" 
         emissive="#00fff2" 
         emissiveIntensity={15} 
         toneMapped={false} 
