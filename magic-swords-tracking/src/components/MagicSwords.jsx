@@ -1,32 +1,30 @@
-import React, { useRef, useMemo } from "react";
+import React, { useRef, useMemo, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-const COUNT = 630; // 21 khớp * 30 kiếm
+const COUNT = 800;
 const JOINTS = 21;
 
 export default function MagicSwords({ handData }) {
   const meshRef = useRef();
   const dummy = useMemo(() => new THREE.Object3D(), []);
-  const tempVec = useMemo(() => new THREE.Vector3(), []);
-  
-  // Vị trí mượt của 21 khớp tay
-  const jointPositions = useMemo(() => 
-    Array.from({ length: JOINTS }, () => new THREE.Vector3()), []
-  );
+  const [isExploding, setIsExploding] = useState(false);
+  const explosionTime = useRef(0);
 
-  // Khởi tạo các thanh kiếm
+  // Vị trí khớp mượt
+  const jointPos = useMemo(() => Array.from({ length: JOINTS }, () => new THREE.Vector3()), []);
+
   const particles = useMemo(() => {
     return Array.from({ length: COUNT }, (_, i) => ({
-      pos: new THREE.Vector3(),
+      pos: new THREE.Vector3((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, 0),
       vel: new THREE.Vector3(),
       jointIdx: i % JOINTS,
-      // OFFSET HÌNH CẦU: Phân bổ đều quanh khớp
       offset: new THREE.Vector3().setFromSphericalCoords(
-        Math.random() * 2 + 0.5, // Bán kính quả cầu
+        Math.random() * 3 + 0.5, 
         Math.random() * Math.PI,
         Math.random() * Math.PI * 2
       ),
+      speed: 0.1 + Math.random() * 0.2,
       phase: Math.random() * Math.PI * 2
     }));
   }, []);
@@ -35,48 +33,53 @@ export default function MagicSwords({ handData }) {
     if (!meshRef.current) return;
     const time = state.clock.elapsedTime;
 
-    // 1. Cập nhật vị trí tay
     if (handData) {
       handData.forEach((pt, i) => {
-        // Tọa độ chuẩn không bị ngược
-        const x = (pt.x - 0.5) * -22; 
-        const y = (pt.y - 0.5) * -16;
-        const z = pt.z * -15;
-        jointPositions[i].lerp(tempVec.set(x, y, z), 0.3);
+        const x = (pt.x - 0.5) * -24; 
+        const y = (pt.y - 0.5) * -18;
+        const z = pt.z * -20;
+        jointPos[i].lerp(new THREE.Vector3(x, y, z), 0.2);
       });
+
+      // LOGIC NỔ: Nếu vận tốc tay cực nhanh hoặc thay đổi vị trí đột ngột
+      // Ở đây tôi dùng phím Space để bạn test trước, hoặc logic khoảng cách
+      // (Giả lập nổ khi đưa tay lại gần tâm)
+      const distToCenter = jointPos[9].length(); 
+      if (distToCenter < 1 && !isExploding) {
+        setIsExploding(true);
+        explosionTime.current = time;
+        setTimeout(() => setIsExploding(false), 1000);
+      }
     }
 
-    // 2. Cập nhật từng thanh kiếm
     particles.forEach((p, i) => {
-      const joint = jointPositions[p.jointIdx];
-      const target = tempVec.copy(joint).add(p.offset);
+      const joint = jointPos[p.jointIdx];
+      let target = new THREE.Vector3().copy(joint).add(p.offset);
 
-      if (!handData) {
-        // Nếu không có tay, bay lượn tự do
-        target.set(Math.sin(time + p.phase) * 6, Math.cos(time + p.phase) * 6, 0);
-      } else {
-        // Thêm độ rung lắc năng lượng
-        target.x += Math.sin(time * 8 + p.phase) * 0.15;
-        target.y += Math.cos(time * 8 + p.phase) * 0.15;
+      // Hiệu ứng Nổ
+      if (isExploding) {
+        const elapsed = time - explosionTime.current;
+        const explodeDir = p.pos.clone().normalize().multiplyScalar(20 * (1 - elapsed));
+        target.add(explodeDir);
       }
 
-      // LỰC HÚT MẠNH (Magnetic attraction)
       const force = new THREE.Vector3().subVectors(target, p.pos);
-      p.vel.add(force.multiplyScalar(0.18)); // Lực kéo cực mạnh
-      p.vel.multiplyScalar(0.8); // Ma sát để không bay quá xa
+      
+      // Bản này giảm "tật" bằng cách dùng lực hút Elastic (Lò xo)
+      p.vel.add(force.multiplyScalar(0.08)); 
+      p.vel.multiplyScalar(0.92); // Ma sát vừa phải để có độ trôi
       p.pos.add(p.vel);
 
-      // CẬP NHẬT DUMMY
       dummy.position.copy(p.pos);
       
-      // Hướng kiếm: Chĩa từ tâm khớp tay ra ngoài (tạo hình cầu lởm chởm)
-      const lookTarget = p.pos.clone().add(p.vel).add(p.pos.clone().sub(joint).normalize());
-      dummy.lookAt(lookTarget);
+      // Hướng: Chĩa theo vận tốc + hướng tâm
+      const lookAtTarget = p.pos.clone().add(p.vel).add(p.pos.clone().sub(joint).normalize().multiplyScalar(0.5));
+      dummy.lookAt(lookAtTarget);
       dummy.rotation.x += Math.PI / 2;
 
-      // Kéo dãn theo tốc độ (Trail effect)
-      const s = 1 + p.vel.length() * 2.5;
-      dummy.scale.set(0.7, s, 0.7);
+      // Stretch
+      const speed = p.vel.length();
+      dummy.scale.set(0.6, 1 + speed * 4, 0.6);
 
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(i, dummy.matrix);
@@ -87,11 +90,11 @@ export default function MagicSwords({ handData }) {
 
   return (
     <instancedMesh ref={meshRef} args={[null, null, COUNT]}>
-      <coneGeometry args={[0.015, 1.2, 4]} />
+      <coneGeometry args={[0.012, 1.2, 4]} />
       <meshStandardMaterial 
-        color="#00ffff" 
-        emissive="#00ffff" 
-        emissiveIntensity={3} 
+        color={isExploding ? "#ffcc00" : "#00ffff"} 
+        emissive={isExploding ? "#ff4400" : "#00ffff"} 
+        emissiveIntensity={isExploding ? 10 : 3} 
         toneMapped={false} 
       />
     </instancedMesh>
