@@ -9,9 +9,9 @@ export default function App() {
 
   useEffect(() => {
     let camera = null;
-    const init = () => {
+    const initTracking = () => {
       if (!window.Hands || !window.Camera || !videoRef.current) {
-        setTimeout(init, 500);
+        setTimeout(initTracking, 500);
         return;
       }
 
@@ -21,10 +21,10 @@ export default function App() {
 
       hands.setOptions({
         maxNumHands: 1,
-        modelComplexity: 0, // 0 để cực mượt, không lag
+        modelComplexity: 0, // Nhẹ nhất để mượt
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5,
-        selfieMode: true
+        selfieMode: true // QUAN TRỌNG: Phải để true để không bị ngược trái phải
       });
 
       hands.onResults((results) => {
@@ -44,18 +44,30 @@ export default function App() {
       });
       camera.start();
     };
-    init();
+    initTracking();
   }, []);
 
   return (
     <div style={{ width: "100vw", height: "100vh", background: "#000" }}>
       <video ref={videoRef} style={{ display: "none" }} playsInline />
-      <Canvas gl={{ antialias: false }} camera={{ position: [0, 0, 15], fov: 45 }}>
+      
+      <Canvas 
+        gl={{ antialias: false }} 
+        camera={{ position: [0, 0, 15], fov: 45 }}
+        dpr={[1, 1.5]}
+      >
         <color attach="background" args={["#020202"]} />
         <ambientLight intensity={1} />
+        
         <MagicSwords handLandmarks={handLandmarks} />
-        <EffectComposer>
-          <Bloom intensity={2.5} luminanceThreshold={0.2} mipmapBlur />
+
+        <EffectComposer disableNormalPass>
+          <Bloom 
+            intensity={2.5} 
+            luminanceThreshold={0.2} 
+            mipmapBlur 
+            radius={0.7}
+          />
         </EffectComposer>
       </Canvas>
     </div>
