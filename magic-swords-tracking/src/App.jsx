@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { Bloom, EffectComposer, Vignette, Noise } from "@react-three/postprocessing";
+import { Bloom, EffectComposer, Vignette, ChromaticAberration } from "@react-three/postprocessing";
 import MagicSwords from "./components/MagicSwords";
 
 export default function App() {
@@ -19,9 +19,9 @@ export default function App() {
       });
       hands.setOptions({
         maxNumHands: 1,
-        modelComplexity: 1, // Tăng độ chính xác cho cử chỉ
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.7,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6, // Tăng nhẹ để ổn định
+        minTrackingConfidence: 0.6,
         selfieMode: true
       });
       hands.onResults((results) => {
@@ -43,12 +43,14 @@ export default function App() {
   return (
     <div style={{ width: "100vw", height: "100vh", background: "#000" }}>
       <video ref={videoRef} style={{ display: "none" }} playsInline />
-      <Canvas camera={{ position: [0, 0, 15], fov: 45 }} gl={{ antialias: false }}>
-        <color attach="background" args={["#010101"]} />
+      {/* Dùng dpr thấp để tăng hiệu năng, antialias false để nét */}
+      <Canvas camera={{ position: [0, 0, 14], fov: 50 }} gl={{ antialias: false }} dpr={[1, 1.5]}>
+        <color attach="background" args={["#030303"]} />
         <MagicSwords handData={handData} />
         <EffectComposer disableNormalPass>
-          <Bloom intensity={2.5} luminanceThreshold={0.15} mipmapBlur />
-          <Noise opacity={0.05} />
+          {/* Tinh chỉnh Bloom: Giảm intensity, tăng threshold để chỉ sáng phần lõi */}
+          <Bloom intensity={1.2} luminanceThreshold={0.6} luminanceSmoothing={0.9} mipmapBlur radius={0.5} />
+          <ChromaticAberration offset={[0.002, 0.002]} />
           <Vignette darkness={0.6} />
         </EffectComposer>
       </Canvas>

@@ -2,21 +2,35 @@ import React, { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-const COUNT = 800; // Số lượng lớn để tạo cảm giác dày đặc
+const COUNT = 800;
 const JOINTS = 21;
+
+// Hàm phụ trợ: Tạo điểm ngẫu nhiên trên mặt cầu (Spherical distribution)
+const randomSpherePoint = (radius) => {
+  const u = Math.random();
+  const v = Math.random();
+  const theta = 2 * Math.PI * u;
+  const phi = Math.acos(2 * v - 1);
+  // Đảm bảo phân bố đều 3D
+  const x = radius * Math.sin(phi) * Math.cos(theta);
+  const y = radius * Math.sin(phi) * Math.sin(theta);
+  const z = radius * Math.cos(phi);
+  return new THREE.Vector3(x, y, z);
+};
 
 export default function MagicSwords({ handData }) {
   const meshRef = useRef();
   const dummy = useMemo(() => new THREE.Object3D(), []);
   
-  // Khởi tạo trạng thái vật lý cho từng thanh kiếm
+  // 1. KHỞI TẠO VẬT LÝ HẠT
   const particles = useMemo(() => {
     return Array.from({ length: COUNT }, () => ({
-      position: new THREE.Vector3(Math.random()*20-10, Math.random()*20-10, 0),
+      position: randomSpherePoint(15), // Bắt đầu ở dạng cầu
       velocity: new THREE.Vector3(),
       jointIdx: Math.floor(Math.random() * JOINTS),
-      offset: new THREE.Vector3((Math.random()-0.5)*10, (Math.random()-0.5)*10, (Math.random()-0.5)*10),
-      mass: 0.8 + Math.random() * 2,
+      // OFFSET HÌNH CẦU: Quan trọng để không bị Donut
+      offset: randomSpherePoint(Math.random() * 3 + 1), 
+      mass: 0.5 + Math.random() * 1.5,
       phase: Math.random() * Math.PI * 2,
     }));
   }, []);
@@ -27,60 +41,61 @@ export default function MagicSwords({ handData }) {
     if (!meshRef.current) return;
     const time = state.clock.elapsedTime;
 
-    // 1. LOGIC: NHẬN DIỆN CỬ CHỈ NẮM/XÒE
+    // 2. TÍNH TOÁN ĐỘ MỞ BÀN TAY (GESTURE)
     let openness = 1.0;
     if (handData) {
-      // Khoảng cách giữa cổ tay (0) và đầu ngón giữa (12)
       const d = new THREE.Vector3(handData[0].x, handData[0].y, 0)
                 .distanceTo(new THREE.Vector3(handData[12].x, handData[12].y, 0));
-      openness = THREE.MathUtils.mapLinear(d, 0.1, 0.4, 0.1, 1.5); // Nắm lại d thấp -> openness thấp
+      openness = THREE.MathUtils.mapLinear(d, 0.15, 0.4, 0.1, 1.2);
+      openness = THREE.MathUtils.clamp(openness, 0.1, 1.5);
 
       handData.forEach((pt, i) => {
-        jointPositions[i].set((pt.x - 0.5) * 25, (pt.y - 0.5) * -18, pt.z * -15);
+        // Tăng hệ số Z để tạo độ sâu 3D rõ ràng hơn
+        jointPositions[i].set((pt.x - 0.5) * 24, (pt.y - 0.5) * -18, pt.z * -25);
       });
     }
 
+    // 3. VÒNG LẶP VẬT LÝ
     particles.forEach((p, i) => {
       const joint = jointPositions[p.jointIdx];
       const target = new THREE.Vector3();
 
       if (handData) {
-        // 2. LOGIC: DYNAMIC SPREAD (Xòe ra hoặc tụ lại)
-        // Khi nắm tay (openness nhỏ), offset sẽ bị triệt tiêu khiến kiếm tụ lại
-        const spread = p.offset.clone().multiplyScalar(openness);
-        target.copy(joint).add(spread);
+        // Mục tiêu = Vị trí khớp + Offset hình cầu (được scale theo độ mở tay)
+        target.copy(joint).add(p.offset.clone().multiplyScalar(openness));
         
-        // 3. LOGIC: BROWNIAN MOTION (Chuyển động tự do quanh khớp)
-        target.x += Math.sin(time * 2 + p.phase) * openness * 2;
-        target.y += Math.cos(time * 2 + p.phase) * openness * 2;
+        // Thêm nhiễu động 3D
+        const noiseScale = openness * 0.5;
+        target.x += Math.sin(time * 3 + p.phase) * noiseScale;
+        target.y += Math.cos(time * 2 + p.phase) * noiseScale;
+        target.z += Math.sin(time * 4 + p.phase) * noiseScale; // Nhiễu động trục Z mạnh hơn
       } else {
-        // IDLE: Bay lơ lửng khi không có tay
-        target.set(Math.sin(time*0.5 + p.phase)*12, Math.cos(time*0.4 + p.phase)*10, Math.sin(time)*5);
+        // Bay lơ lửng dạng cầu khi không có tay
+        const idleSphere = randomSpherePoint(10 + Math.sin(time + p.phase)*2);
+        target.copy(idleSphere);
       }
 
-      // 4. LOGIC: PHYSICS & INERTIA (Quán tính mạnh)
+      // Lực hút đàn hồi (Spring force)
       const force = new THREE.Vector3().subVectors(target, p.position);
       const dist = force.length();
-      
-      // Lực hút tỉ lệ thuận với khoảng cách (Lò xo)
-      force.normalize().multiplyScalar(dist * 0.04);
+      force.normalize().multiplyScalar(dist * 0.05); // Lực hút mạnh hơn chút
       
       p.velocity.add(force.divideScalar(p.mass));
-      // Damping (Ma sát không khí) - Số càng nhỏ quán tính càng lớn
-      p.velocity.multiplyScalar(0.94); 
+      p.velocity.multiplyScalar(0.91); // Ma sát cao để chuyển động dứt khoát
       p.position.add(p.velocity);
 
-      // 5. LOGIC: LOOK AT & STRETCH (Xoay và Kéo dãn theo vận tốc)
+      // HIỂN THỊ
       dummy.position.copy(p.position);
       const velocityDir = p.position.clone().add(p.velocity);
       dummy.lookAt(velocityDir);
       dummy.rotation.x += Math.PI / 2;
 
-      // Kéo dài kiếm dựa trên tốc độ bay
+      // Kéo dãn theo tốc độ
       const speed = p.velocity.length();
-      const stretch = 1 + speed * 3;
-      // Nếu nắm tay, kiếm thu ngắn lại thành các điểm sáng
-      dummy.scale.set(openness * 0.5 + 0.5, stretch * (openness * 0.5 + 0.5), openness * 0.5 + 0.5);
+      const stretch = 1 + speed * 4;
+      // Scale nhỏ lại khi nắm tay
+      const baseScale = openness * 0.4 + 0.6;
+      dummy.scale.set(baseScale, stretch * baseScale, baseScale);
 
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(i, dummy.matrix);
@@ -91,12 +106,16 @@ export default function MagicSwords({ handData }) {
 
   return (
     <instancedMesh ref={meshRef} args={[null, null, COUNT]}>
-      <cylinderGeometry args={[0.01, 0.03, 1.2, 3]} />
+      {/* HÌNH NÓN CỰC MẢNH (Needle shape) */}
+      <coneGeometry args={[0.008, 1.5, 4]} /> 
       <meshStandardMaterial 
-        color="#00fff2" 
+        color="#00ffff" 
         emissive="#00fff2" 
-        emissiveIntensity={15} 
-        toneMapped={false} 
+        // GIẢM ĐỘ SÁNG ĐỂ TRÁNH CHÓI
+        emissiveIntensity={3} 
+        toneMapped={false}
+        roughness={0.1}
+        metalness={0.8}
       />
     </instancedMesh>
   );
